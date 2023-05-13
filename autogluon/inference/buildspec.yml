@@ -14,9 +14,9 @@ repository_info:
 
 context:
   inference_context: &INFERENCE_CONTEXT
-    torchserve-entrypoint:
-      source: ../build_artifacts/inference/torchserve-entrypoint.py
-      target: torchserve-entrypoint.py
+    dockerd-entrypoint:
+      source: ../build_artifacts/inference/dockerd-entrypoint.sh
+      target: dockerd-entrypoint.sh
     config:
       source: ../build_artifacts/inference/config.properties
       target: config.properties

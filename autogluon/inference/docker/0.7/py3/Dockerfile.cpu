@@ -5,9 +5,13 @@ FROM 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-inference:1.13.1-cpu-p
 # Specify accept-bind-to-port LABEL for inference pipelines to use SAGEMAKER_BIND_TO_PORT
 # https://docs.aws.amazon.com/sagemaker/latest/dg/inference-pipeline-real-time.html
 LABEL com.amazonaws.sagemaker.capabilities.accept-bind-to-port=true
+
 # Specify multi-models LABEL to indicate container is capable of loading and serving multiple models concurrently
 # https://docs.aws.amazon.com/sagemaker/latest/dg/build-multi-model-build-container.html
 LABEL com.amazonaws.sagemaker.capabilities.multi-models=true
+
+LABEL com.amazonaws.ml.engines.sagemaker.dlc.framework.djl.cpu=true
+LABEL com.amazonaws.ml.engines.sagemaker.dlc.framework.djl.cpu-full=true
 
 LABEL maintainer="Amazon AI"
 LABEL dlc_major_version="1"
@@ -18,9 +22,27 @@ ENV PYTORCH_SKIP_CUDNN_COMPATIBILITY_CHECK=1
 RUN apt-get update \
  && apt-get -y upgrade \
  && apt-get autoremove -y \
- && apt-get install tesseract-ocr -y \
+ && apt-get install -y tesseract-ocr openjdk-11-jdk-headless \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
+
+
+# Install DJLServe
+ARG DJL_VERSION=0.22.1
+
+RUN curl https://publish.djl.ai/djl-serving/djl-serving_${DJL_VERSION}-1_all.deb -f -o djl-serving_all.deb \
+ && dpkg -i djl-serving_all.deb \
+ && rm djl-serving_all.deb \
+ && mkdir -p /opt/djl/conf \
+ && cp /usr/local/djl-serving-*/conf/log4j2.xml /opt/djl/conf/ \
+ && cp -r /usr/local/djl-serving-*/plugins /opt/djl/plugins \
+ && djl-serving -i ai.djl.python:python:${DJL_VERSION}
+
+# add entrypoint
+COPY dockerd-entrypoint.sh /usr/local/bin/dockerd-entrypoint.sh
+RUN chmod +x /usr/local/bin/dockerd-entrypoint.sh
+
+COPY config.properties /opt/djl/conf/
 
 # Install AutoGluon
 ARG AUTOGLUON_VERSION=0.7.0
@@ -40,12 +62,6 @@ RUN rm -rf /usr/local/lib/python3.9/dist-packages/gluonts/nursery/tsbench
 RUN rm -rf /usr/local/lib/python3.9/dist-packages/ray/jars \
  && rm -rf /opt/conda/lib/python3.9/site-packages/ray/jars
 
-# add TS entrypoint
-COPY config.properties /home/model-server
-
-COPY torchserve-entrypoint.py /usr/local/bin/dockerd-entrypoint.py
-RUN chmod +x /usr/local/bin/dockerd-entrypoint.py
-
 RUN HOME_DIR=/root \
  && curl -o ${HOME_DIR}/oss_compliance.zip https://aws-dlinfra-utilities.s3.amazonaws.com/oss_compliance.zip \
  && unzip ${HOME_DIR}/oss_compliance.zip -d ${HOME_DIR}/ \
@@ -57,6 +73,21 @@ RUN HOME_DIR=/root \
 
 RUN curl -o /licenses-autogluon.txt https://autogluon.s3.us-west-2.amazonaws.com/licenses/THIRD-PARTY-LICENSES.txt
 
+WORKDIR /opt/djl
+ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+ENV OMP_NUM_THREADS=1
+ENV TF_NUM_INTEROP_THREADS=1
+ENV TF_NUM_INTRAOP_THREADS=1
+ENV TF_CPP_MIN_LOG_LEVEL=1
+ENV JAVA_OPTS="-Xmx1g -Xms1g -XX:-UseContainerSupport -XX:+ExitOnOutOfMemoryError"
+ENV MODEL_SERVER_HOME=/opt/djl
+ENV DJL_CACHE_DIR=/tmp/.djl.ai
+ENV HUGGINGFACE_HUB_CACHE=/tmp
+ENV TRANSFORMERS_CACHE=/tmp
+
+RUN useradd -m -d /home/djl djl && \
+    chown -R djl:djl /opt/djl
+
 EXPOSE 8080 8081
-ENTRYPOINT ["python", "/usr/local/bin/dockerd-entrypoint.py"]
-CMD ["torchserve", "--start", "--ts-config", "/home/model-server/config.properties", "--model-store", "/home/model-server/"]
+ENTRYPOINT ["/usr/local/bin/dockerd-entrypoint.sh"]
+CMD ["serve"]
